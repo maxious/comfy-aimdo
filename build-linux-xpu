@@ -1,0 +1,97 @@
+#!/bin/bash
+
+# Build script for aimdo XPU (Intel GPU) backend
+# Requires Level Zero development headers and libraries
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR="${SCRIPT_DIR}/src"
+OUT_DIR="${SCRIPT_DIR}/comfy_aimdo"
+
+# Find compiler
+CC=""
+for compiler in icx gcc clang; do
+    if command -v ${compiler} &> /dev/null; then
+        CC="${compiler}"
+        break
+    fi
+done
+
+if [ -z "${CC}" ]; then
+    echo "No C compiler found"
+    exit 1
+fi
+
+# Level Zero headers (from libze-intel-gpu-dev or oneAPI)
+ZE_INCLUDE=""
+for path in \
+    "/usr/include" \
+    "/opt/intel/oneapi/compiler/latest/include"
+do
+    if [ -f "${path}/level_zero/ze_api.h" ]; then
+        ZE_INCLUDE="${path}"
+        break
+    fi
+done
+
+if [ -z "${ZE_INCLUDE}" ]; then
+    echo "Level Zero headers not found"
+    exit 1
+fi
+
+# Level Zero library
+ZE_LIB=""
+for path in \
+    "/usr/lib/x86_64-linux-gnu" \
+    "/opt/intel/oneapi/compiler/latest/lib"
+do
+    if [ -f "${path}/libze_loader.so" ]; then
+        ZE_LIB="${path}"
+        break
+    fi
+done
+
+if [ -z "${ZE_LIB}" ]; then
+    echo "Level Zero library not found"
+    exit 1
+fi
+
+echo "Building aimdo XPU with:"
+echo "  CC: ${CC}"
+echo "  ZE_INCLUDE: ${ZE_INCLUDE}"
+echo "  ZE_LIB: ${ZE_LIB}"
+
+# Source files for XPU backend
+SRCS="${SRC_DIR}/control_xpu.c \
+      ${SRC_DIR}/debug_xpu.c \
+      ${SRC_DIR}/hostbuf_xpu.c \
+      ${SRC_DIR}/vrambuf_xpu.c \
+      ${SRC_DIR}/model-vbar_xpu.c \
+      ${SRC_DIR}/pyt-xpu-plug-alloc.c"
+
+mkdir -p "${OUT_DIR}"
+
+# Compile to object files first, then link
+OBJECTS=""
+for src in ${SRCS}; do
+    obj="${OUT_DIR}/$(basename ${src%.c}).o"
+    OBJECTS="${OBJECTS} ${obj}"
+    echo "Compiling: ${src} -> ${obj}"
+    ${CC} -c -fPIC -x c \
+        -I"${ZE_INCLUDE}" \
+        -I"${SRC_DIR}" \
+        -o "${obj}" \
+        "${src}"
+done
+
+# Link shared library
+echo "Linking: ${OBJECTS} -> ${OUT_DIR}/aimdo_xpu.so"
+${CC} -shared -fPIC -o "${OUT_DIR}/aimdo_xpu.so" \
+    -L"${ZE_LIB}" \
+    -Wl,-rpath,"${ZE_LIB}" \
+    ${OBJECTS} \
+    -lze_loader \
+    -lpthread
+
+echo "Built: ${OUT_DIR}/aimdo_xpu.so"

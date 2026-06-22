@@ -4,9 +4,10 @@ This project is a pytorch VRAM allocator that implements on-demand offloading of
 
 ## Support:
 
-* **Nvidia GPUs only**
+* **Nvidia GPUs (CUDA)**
+* **Intel GPUs (XPU/Level Zero)**
 * **Pytorch 2.8+**
-* **Cuda 12.8+**
+* **Cuda 12.8+** / **Intel oneAPI Level Zero**
 * **Windows 11+** / **Linux** as per python ManyLinux support
 
 ---
@@ -46,8 +47,14 @@ see examples/example.py
 
 ## Backend:
 
+### CUDA (Nvidia GPUs)
 * VBAR allocation is done with `cuMemAddressReserve()`, faulting with `cuMemCreate()` and `cuMemMap()` and all frees done with appropriate converse APIs.
 * For consistency with VBAR memory management, main pytorch allocator plugin is also implemented with `cuMemAddressReserve` -> `cuMemCreate` -> `cuMemMap`. This also behaves a lot better on Windows systems with System Memory fallback.
+
+### XPU (Intel GPUs)
+* VBAR allocation uses Level Zero APIs: `zeVirtualMemReserve()`, `zePhysicalMemCreate()`, `zeVirtualMemMap()` and their converse APIs.
+* The XPU backend requires building the `aimdo_xpu.so` library from source using Intel oneAPI toolchains.
+* The Python layer automatically detects CUDA vs XPU and loads the appropriate library.
 
 ## Caveats:
 

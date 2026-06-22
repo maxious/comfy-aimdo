@@ -15,8 +15,34 @@ comfy_aimdo.control.set_log_info()
 import torch
 import comfy_aimdo.torch
 from comfy_aimdo.model_vbar import ModelVBAR, vbar_fault, vbar_unpin, vbar_signature_compare
+from comfy_aimdo.torch import aimdo_to_tensor
 
-comfy_aimdo.control.init_device(torch.device(torch.cuda.current_device()).index)
+dev_type = comfy_aimdo.control.device_type()
+
+if dev_type == comfy_aimdo.control.DeviceType.XPU:
+    current_device = torch.xpu.current_device()
+    device_str = f"xpu:{current_device}"
+
+    def get_gpu_size():
+        props = torch.xpu.get_device_properties(torch.xpu.current_device())
+        return props.total_memory
+
+    def empty_cache():
+        torch.xpu.empty_cache()
+else:
+    current_device = torch.cuda.current_device()
+    device_str = f"cuda:{current_device}"
+
+    def get_gpu_size():
+        return torch.cuda.get_device_properties(
+            torch.cuda.current_device()
+        ).total_memory
+
+    def empty_cache():
+        torch.cuda.empty_cache()
+
+
+comfy_aimdo.control.init_device(current_device)
 
 signatures = {}
 
@@ -26,7 +52,7 @@ def run_layer(input_tensor, weight, cpu_source, weight_offset): #NOTE: offset ju
     vbar, ptr, size = weight
     signature = vbar_fault(weight)
     if signature is not None:
-        weight_tensor = comfy_aimdo.torch.aimdo_to_tensor(weight, torch.device("cuda:0")).view(dtype=input_tensor.dtype).view(input_tensor.shape)
+        weight_tensor = aimdo_to_tensor(weight, torch.device(device_str)).view(dtype=input_tensor.dtype).view(input_tensor.shape)
         if not vbar_signature_compare(signature, signatures.get(weight, None)):
             weight_tensor.copy_(cpu_source)
             if weight_offset is not None:
@@ -39,7 +65,7 @@ def run_layer(input_tensor, weight, cpu_source, weight_offset): #NOTE: offset ju
         weight = None
         if weight_offset is not None:
             print(f"[Offloaded] offset: {weight_offset / M}M")
-        w = cpu_source.to("cuda:0", non_blocking=True)
+        w = cpu_source.to(device_str, non_blocking=True)
         
     #Layer math here
     output = input_tensor + w
@@ -50,7 +76,7 @@ def run_layer(input_tensor, weight, cpu_source, weight_offset): #NOTE: offset ju
     return output
 
 def run_model(weights, cpu_weight, sleep=0):
-    x = torch.zeros(cpu_weight.shape, device="cuda:0", dtype=torch.float16)
+    x = torch.zeros(cpu_weight.shape, device=device_str, dtype=torch.float16)
     for i in range(6): # Iteration loop
         print(f"\nIteration {i}")
         weight_offset = 0 #just for print messages
@@ -64,9 +90,9 @@ def run_model(weights, cpu_weight, sleep=0):
                 weight_offset += cpu_weight.numel() * cpu_weight.element_size()
         time.sleep(sleep) #so you can see nvtop
     gc.collect()
-    torch.cuda.empty_cache()
+    empty_cache()
 
-gpu_size = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+gpu_size = get_gpu_size()
 dtype = torch.float16
 
 #A big model, with 30 weights filling 1.5X the available VRAM
